@@ -4,6 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_core.tools import tool
 from datetime import datetime, date, timedelta
+import operator
+from typing import TypedDict, Annotated, Sequence
+from langchain_core.messages import BaseMessage, HumanMessage
+from langgraph.graph import StateGraph, END
+from langchain_groq import ChatGroq
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -53,15 +60,17 @@ system_prompt = ChatPromptTemplate.from_messages(
 async def chat_endpoint(request: ChatRequest):
     inputs = {"messages": [HumanMessage(content=request.message)]}
     final_response = ""
-    for chunk in app_graph.stream(inputs):
-        if "agent" in chunk:
-            for message in chunk["agent"]["messages"]:
-                final_response += str(message.content)
+    for chunk in final_chain.stream(inputs):
+            if "agent" in chunk:
+                for message in chunk["agent"]["messages"]:
+                    if not message.tool_calls:
+                        final_response += str(message.content)
     
     return {"response": final_response}
 
 @tool
 def get_available_slots(speciality: str, day: str) -> list[str]:
+    """This is the docstring. It must exist. Checks for available appointment slots for a given specialty and day."""
     print(f"Fetching available slots for speciality: {speciality} on day: {day}...")
     try:
         requested_date = datetime.strptime(day, "%d-%m-%Y").date()
@@ -79,19 +88,13 @@ def get_available_slots(speciality: str, day: str) -> list[str]:
     
 @tool
 def book_appointment(speciality: str, day: str, time: str, patient_name: str) -> str:
+    """This is also a docstring. It's required. Books an appointment for a user."""
     print(f"Booking appointment for {patient_name} with {speciality} on {day} at {time}..")
     return f"Appointment booked for {patient_name} with {speciality} on {day} at {time}."
 
 tools = [get_available_slots, book_appointment]
 
 # Agent State and Graph using Langgraph
-import operator
-from typing import TypedDict, Annotated, Sequence
-from langchain_core.messages import BaseMessage, HumanMessage
-from langgraph.graph import StateGraph, END
-from langgraph_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
 
@@ -105,7 +108,7 @@ def call_model(state: AgentState):
 
 def call_tool(state: AgentState):
     print("Calling Tool....")
-    last_message = state['message'][-1]
+    last_message = state['messages'][-1]
 
     tool_outputs = []
     for tool_call in last_message.tool_calls:
@@ -146,3 +149,4 @@ workflow.add_edge("action", "agent")
 add_graph = workflow.compile()
 print("Graph Compiled Succesfully!")
 
+final_chain = system_prompt | add_graph
